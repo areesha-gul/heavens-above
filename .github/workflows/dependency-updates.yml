@@ -1,0 +1,434 @@
+name: Dependency Updates
+
+on:
+  schedule:
+    # Run every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      dependency-type:
+        description: 'Type of dependencies to update'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - production
+        - development
+      update-level:
+        description: 'Update level'
+        required: false
+        default: 'minor'
+        type: choice
+        options:
+        - patch
+        - minor
+        - major
+
+jobs:
+  dependency-scan:
+    name: Scan for Dependency Updates
+    runs-on: ubuntu-latest
+    
+    outputs:
+      has-updates: ${{ steps.scan.outputs.has-updates }}
+      update-count: ${{ steps.scan.outputs.update-count }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Install npm-check-updates
+      run: npm install -g npm-check-updates
+
+    - name: Scan for available updates
+      id: scan
+      run: |
+        echo "Scanning for dependency updates..."
+        
+        # Check for updates without applying them
+        ncu --format json > available-updates.json
+        
+        # Count available updates
+        UPDATE_COUNT=$(node -e "console.log(Object.keys(JSON.parse(require('fs').readFileSync('available-updates.json', 'utf8') || '{}')).length)")
+        
+        if [ "$UPDATE_COUNT" -gt 0 ]; then
+          echo "Found $UPDATE_COUNT dependency updates"
+          echo "has-updates=true" >> $GITHUB_OUTPUT
+          echo "update-count=$UPDATE_COUNT" >> $GITHUB_OUTPUT
+          
+          # Generate update report
+          node << 'SCRIPT'
+          const fs = require('fs');
+          const updates = JSON.parse(fs.readFileSync('./available-updates.json', 'utf8'));
+          const packageJson = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
+          
+          const report = {
+            timestamp: new Date().toISOString(),
+            project: packageJson.name,
+            totalUpdates: Object.keys(updates).length,
+            updates: updates,
+            breakdown: {
+              major: 0,
+              minor: 0,
+              patch: 0
+            }
+          };
+          
+          // Categorize updates
+          Object.entries(updates).forEach(([pkg, newVersion]) => {
+            const currentVersion = packageJson.dependencies?.[pkg] || packageJson.devDependencies?.[pkg];
+            if (currentVersion) {
+              // Simple version comparison (this is simplified)
+              const currentMajor = currentVersion.match(/[0-9]+/)?.[0];
+              const newMajor = newVersion.match(/[0-9]+/)?.[0];
+              
+              if (currentMajor !== newMajor) {
+                report.breakdown.major++;
+              } else if (currentVersion !== newVersion) {
+                report.breakdown.minor++;
+              } else {
+                report.breakdown.patch++;
+              }
+            }
+          });
+          
+          fs.writeFileSync('update-report.json', JSON.stringify(report, null, 2));
+          console.log('Update report generated');
+          SCRIPT
+          
+          echo "Available updates:"
+          cat available-updates.json
+        else
+          echo "All dependencies are up to date"
+          echo "has-updates=false" >> $GITHUB_OUTPUT
+          echo "update-count=0" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload scan results
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependency-scan-$(date +%Y-%m-%d)
+        path: |
+          available-updates.json
+          update-report.json
+        retention-days: 30
+
+  update-patch:
+    name: Update Patch Versions
+    runs-on: ubuntu-latest
+    needs: dependency-scan
+    if: needs.dependency-scan.outputs.has-updates == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Install npm-check-updates
+      run: npm install -g npm-check-updates
+
+    - name: Configure git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Create update branch
+      run: |
+        branch_name="deps/patch-updates-$(date +%Y%m%d)"
+        echo "BRANCH_NAME=$branch_name" >> $GITHUB_ENV
+        git checkout -b $branch_name
+
+    - name: Update patch versions
+      id: update-patch
+      run: |
+        echo "Updating patch versions..."
+        
+        # Update only patch versions
+        ncu --target patch --upgrade
+        
+        # Check if updates were made
+        if git diff --quiet package.json; then
+          echo "No patch updates available"
+          echo "updates-applied=false" >> $GITHUB_OUTPUT
+          exit 0
+        else
+          echo "Patch updates applied successfully"
+          echo "updates-applied=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Install updated dependencies
+      if: steps.update-patch.outputs.updates-applied == 'true'
+      run: npm install
+
+    - name: Run tests with updated dependencies
+      if: steps.update-patch.outputs.updates-applied == 'true'
+      run: |
+        echo "Running tests with updated patch versions..."
+        npm test
+
+    - name: Create pull request for patch updates
+      if: steps.update-patch.outputs.updates-applied == 'true'
+      id: create-patch-pr
+      run: |
+        echo "Creating pull request for patch updates..."
+        
+        git add package.json package-lock.json
+        git commit -m "chore(deps): update patch versions"
+        git push origin ${{ env.BRANCH_NAME }}
+        
+        # Create PR using GitHub CLI
+        pr_result=$(gh pr create \
+          --title "Dependency Updates: Patch Versions $(date +%Y-%m-%d)" \
+          --body "Automated patch version dependency updates.
+          
+          ## Changes
+          - Updated patch versions for dependencies
+          - Automated via GitHub Actions
+          
+          ## Verification
+          - [x] Tests passed with updated dependencies
+          - [ ] Manual review recommended
+          
+          ## Impact
+          - Low risk (patch versions only)
+          - Security and bug fixes" \
+          --base main \
+          --head ${{ env.BRANCH_NAME }} \
+          --label "dependencies,patch-update" \
+          --assignee "${{ github.actor }}")
+        
+        echo "PR_URL=$pr_result" >> $GITHUB_OUTPUT
+        echo "Pull request created: $pr_result"
+
+  update-minor:
+    name: Update Minor Versions
+    runs-on: ubuntu-latest
+    needs: dependency-scan
+    if: needs.dependency-scan.outputs.has-updates == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Install npm-check-updates
+      run: npm install -g npm-check-updates
+
+    - name: Configure git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Create update branch
+      run: |
+        branch_name="deps/minor-updates-$(date +%Y%m%d)"
+        echo "BRANCH_NAME=$branch_name" >> $GITHUB_ENV
+        git checkout -b $branch_name
+
+    - name: Update minor versions
+      id: update-minor
+      run: |
+        echo "Updating minor versions..."
+        
+        # Update minor versions
+        ncu --target minor --upgrade
+        
+        # Check if updates were made
+        if git diff --quiet package.json; then
+          echo "No minor updates available"
+          echo "updates-applied=false" >> $GITHUB_OUTPUT
+          exit 0
+        else
+          echo "Minor updates applied successfully"
+          echo "updates-applied=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Install updated dependencies
+      if: steps.update-minor.outputs.updates-applied == 'true'
+      run: npm install
+
+    - name: Run tests with updated dependencies
+      if: steps.update-minor.outputs.updates-applied == 'true'
+      run: |
+        echo "Running tests with updated minor versions..."
+        npm test
+
+    - name: Build with updated dependencies
+      if: steps.update-minor.outputs.updates-applied == 'true'
+      run: |
+        echo "Building with updated minor versions..."
+        npm run build
+
+    - name: Create pull request for minor updates
+      if: steps.update-minor.outputs.updates-applied == 'true'
+      id: create-minor-pr
+      run: |
+        echo "Creating pull request for minor updates..."
+        
+        git add package.json package-lock.json
+        git commit -m "chore(deps): update minor versions"
+        git push origin ${{ env.BRANCH_NAME }}
+        
+        # Create PR using GitHub CLI
+        pr_result=$(gh pr create \
+          --title "Dependency Updates: Minor Versions $(date +%Y-%m-%d)" \
+          --body "Automated minor version dependency updates.
+          
+          ## Changes
+          - Updated minor versions for dependencies
+          - Automated via GitHub Actions
+          
+          ## Verification
+          - [x] Tests passed with updated dependencies
+          - [x] Build successful with updated dependencies
+          - [ ] Manual review recommended
+          
+          ## Impact
+          - Medium risk (minor versions)
+          - New features and improvements
+          - Possible API changes" \
+          --base main \
+          --head ${{ env.BRANCH_NAME }} \
+          --label "dependencies,minor-update" \
+          --assignee "${{ github.actor }}")
+        
+        echo "PR_URL=$pr_result" >> $GITHUB_OUTPUT
+        echo "Pull request created: $pr_result"
+
+  security-updates:
+    name: Security Updates
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Run security audit
+      id: security-audit
+      run: |
+        echo "Running security audit..."
+        npm audit --audit-level high --json > audit-results.json || true
+        
+        # Check if vulnerabilities were found
+        VULN_COUNT=$(node -e "try { console.log(JSON.parse(require('fs').readFileSync('./audit-results.json')).metadata.vulnerabilities.total || 0) } catch(e) { console.log(0) }")
+        
+        if [ "$VULN_COUNT" -gt 0 ]; then
+          echo "Found $VULN_COUNT security vulnerabilities"
+          echo "has-vulnerabilities=true" >> $GITHUB_OUTPUT
+        else
+          echo "No security vulnerabilities found"
+          echo "has-vulnerabilities=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Fix security vulnerabilities
+      if: steps.security-audit.outputs.has-vulnerabilities == 'true'
+      id: fix-security
+      run: |
+        echo "Attempting to fix security vulnerabilities..."
+        
+        # Try to fix vulnerabilities
+        npm audit fix
+        
+        # Check if fixes were applied
+        if git diff --quiet package.json package-lock.json; then
+          echo "No automatic fixes available or already fixed"
+          echo "fixes-applied=false" >> $GITHUB_OUTPUT
+        else
+          echo "Security fixes applied successfully"
+          echo "fixes-applied=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create security fix PR
+      if: steps.security-audit.outputs.has-vulnerabilities == 'true' && steps.fix-security.outputs.fixes-applied == 'true'
+      run: |
+        echo "Creating security fix pull request..."
+        
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        branch_name="deps/security-fixes-$(date +%Y%m%d)"
+        git checkout -b $branch_name
+        git add package.json package-lock.json
+        git commit -m "fix(security): address vulnerability issues"
+        git push origin $branch_name
+        
+        # Create high-priority PR for security fixes
+        gh pr create \
+          --title "Security Vulnerability Fixes $(date +%Y-%m-%d)" \
+          --body "URGENT: Security vulnerability fixes.
+          
+          ## Changes
+          - Applied security patches for vulnerable dependencies
+          - Automated via npm audit fix
+          
+          ## Priority: HIGH
+          - Addresses critical security vulnerabilities
+          - Requires immediate review and merge
+          
+          ## Verification
+          - [ ] Review security impact
+          - [ ] Test functionality
+          - [ ] Merge promptly" \
+          --base main \
+          --head $branch_name \
+          --label "dependencies,security,high-priority" \
+          --assignee "${{ github.actor }}"
+
+  workflow-summary:
+    name: Workflow Summary
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, update-patch, update-minor, security-updates]
+    if: always()
+    
+    steps:
+    - name: Generate summary report
+      run: |
+        echo "DEPENDENCY UPDATE WORKFLOW SUMMARY"
+        echo "=================================="
+        echo "Workflow: ${{ github.workflow }}"
+        echo "Run ID: ${{ github.run_id }}"
+        echo "Trigger: ${{ github.event_name }}"
+        echo "Timestamp: $(date)"
+        echo ""
+        echo "SCAN RESULTS:"
+        echo "- Updates Available: ${{ needs.dependency-scan.outputs.has-updates }}"
+        echo "- Update Count: ${{ needs.dependency-scan.outputs.update-count }}"
+        echo ""
+        echo "UPDATE JOBS:"
+        echo "- Patch Updates: ${{ needs.update-patch.result }}"
+        echo "- Minor Updates: ${{ needs.update-minor.result }}"
+        echo "- Security Updates: ${{ needs.security-updates.result }}"
+        echo ""
+        echo "NEXT ACTIONS:"
+        echo "1. Review created pull requests in GitHub"
+        echo "2. Check test results and build status"
+        echo "3. Merge patch updates (low risk)"
+        echo "4. Review minor updates for breaking changes"
+        echo "5. Prioritize security updates for immediate merge"
+        echo ""
+        echo "Workflow execution completed"
