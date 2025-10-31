@@ -253,23 +253,27 @@ jobs:
       if: always()
       with:
         script: |
-          const { code-analysis, coding-standards, security-scan, code-metrics, test-validation } = context.job.needs;
+          const codeAnalysis = context.job.needs['code-analysis'];
+          const codingStandards = context.job.needs['coding-standards'];
+          const securityScan = context.job.needs['security-scan'];
+          const codeMetrics = context.job.needs['code-metrics'];
+          const testValidation = context.job.needs['test-validation'];
           
           const allPassed = 
-            code-analysis.result === 'success' &&
-            coding-standards.result === 'success' && 
-            security-scan.result === 'success' &&
-            test-validation.result === 'success';
+            codeAnalysis.result === 'success' &&
+            codingStandards.result === 'success' && 
+            securityScan.result === 'success' &&
+            testValidation.result === 'success';
           
           const commentBody = `
           Automated Code Review Report
           
           Check Results
-          - Code Analysis: ${code-analysis.result === 'success' ? 'Passed' : 'Failed'}
-          - Coding Standards: ${coding-standards.result === 'success' ? 'Passed' : 'Failed'} 
-          - Security Scan: ${security-scan.result === 'success' ? 'Passed' : 'Failed'}
-          - Test Validation: ${test-validation.result === 'success' ? 'Passed' : 'Failed'}
-          - Code Metrics: ${code-metrics.result === 'success' ? 'Passed' : 'Completed'}
+          - Code Analysis: ${codeAnalysis.result === 'success' ? 'Passed' : 'Failed'}
+          - Coding Standards: ${codingStandards.result === 'success' ? 'Passed' : 'Failed'} 
+          - Security Scan: ${securityScan.result === 'success' ? 'Passed' : 'Failed'}
+          - Test Validation: ${testValidation.result === 'success' ? 'Passed' : 'Failed'}
+          - Code Metrics: ${codeMetrics.result === 'success' ? 'Passed' : 'Completed'}
           
           Summary
           ${allPassed ? 
