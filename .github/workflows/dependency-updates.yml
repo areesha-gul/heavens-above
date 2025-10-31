@@ -53,8 +53,8 @@ jobs:
       run: |
         echo "Scanning for dependency updates..."
         
-        # Check for updates without applying them
-        ncu --format json > available-updates.json
+        # Check for updates without applying them - use correct ncu format
+        ncu --json > available-updates.json
         
         # Count available updates
         UPDATE_COUNT=$(node -e "console.log(Object.keys(JSON.parse(require('fs').readFileSync('available-updates.json', 'utf8') || '{}')).length)")
@@ -67,7 +67,7 @@ jobs:
           # Generate update report
           node << 'SCRIPT'
           const fs = require('fs');
-          const updates = JSON.parse(fs.readFileSync('./available-updates.json', 'utf8'));
+          const updates = JSON.parse(fs.readFileSync('./available-updates.json', 'utf8') || '{}');
           const packageJson = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
           
           const report = {
@@ -86,7 +86,7 @@ jobs:
           Object.entries(updates).forEach(([pkg, newVersion]) => {
             const currentVersion = packageJson.dependencies?.[pkg] || packageJson.devDependencies?.[pkg];
             if (currentVersion) {
-              // Simple version comparison (this is simplified)
+              // Simple version comparison
               const currentMajor = currentVersion.match(/[0-9]+/)?.[0];
               const newMajor = newVersion.match(/[0-9]+/)?.[0];
               
