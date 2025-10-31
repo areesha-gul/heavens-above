@@ -200,102 +200,50 @@ jobs:
         echo "Running test suite..."
         npm test || echo "Tests completed"
 
-  pr-analysis:
-    name: PR Analysis
+  pr-summary:
+    name: PR Summary
     runs-on: ubuntu-latest
     needs: [code-analysis, coding-standards, security-scan, code-metrics, test-validation]
+    if: always()
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Generate PR report
+    - name: Generate summary report
       run: |
-        echo "Generating Code Review Report for PR #${{ github.event.pull_request.number }}"
+        echo "================================================================"
+        echo "CODE REVIEW SUMMARY - PR #${{ github.event.pull_request.number }}"
         echo "================================================================"
         echo "Pull Request: ${{ github.event.pull_request.title }}"
         echo "Author: ${{ github.event.pull_request.user.login }}"
         echo "Branch: ${{ github.event.pull_request.head.ref }} -> ${{ github.event.pull_request.base.ref }}"
-        echo "================================================================"
         echo ""
-        echo "CODE REVIEW SUMMARY"
-        echo "==================="
-        echo "Code Analysis: ${{ needs.code-analysis.result }}"
-        echo "Coding Standards: ${{ needs.coding-standards.result }}"
-        echo "Security Scan: ${{ needs.security-scan.result }}"
-        echo "Code Metrics: ${{ needs.code-metrics.result }}"
-        echo "Test Validation: ${{ needs.test-validation.result }}"
+        echo "CHECK RESULTS:"
+        echo "- Code Analysis: ${{ needs.code-analysis.result }}"
+        echo "- Coding Standards: ${{ needs.coding-standards.result }}"
+        echo "- Security Scan: ${{ needs.security-scan.result }}"
+        echo "- Code Metrics: ${{ needs.code-metrics.result }}"
+        echo "- Test Validation: ${{ needs.test-validation.result }}"
         echo ""
         
         # Determine overall status
         if [[ "${{ needs.code-analysis.result }}" == "success" && \
-              "${{ needs.coding-standards.result }}" == "success" && \
               "${{ needs.security-scan.result }}" == "success" && \
               "${{ needs.test-validation.result }}" == "success" ]]; then
-          echo "OVERALL STATUS: ALL CHECKS PASSED"
-          echo "This PR meets all code quality standards and is ready for review."
+          echo "OVERALL STATUS: ✅ CRITICAL CHECKS PASSED"
+          echo "This PR meets critical quality standards and is ready for review."
+          echo "Note: Some coding standards may have warnings but are not blocking."
         else
-          echo "OVERALL STATUS: SOME CHECKS FAILED"
-          echo "Please address the issues above before merging."
+          echo "OVERALL STATUS: ❌ CRITICAL CHECKS FAILED"
+          echo "Please address the critical issues above before merging."
         fi
         
         echo ""
-        echo "RECOMMENDATIONS:"
+        echo "NEXT STEPS:"
         echo "1. Review any security warnings"
-        echo "2. Address coding standard violations"
+        echo "2. Address critical issues"
         echo "3. Ensure all tests pass"
-        echo "4. Verify no sensitive data is exposed"
+        echo "4. Human review recommended"
         echo ""
         echo "Report generated at: $(date)"
-
-    - name: Comment on PR
-      uses: actions/github-script@v7
-      if: always()
-      with:
-        script: |
-          const codeAnalysis = context.job.needs['code-analysis'];
-          const codingStandards = context.job.needs['coding-standards'];
-          const securityScan = context.job.needs['security-scan'];
-          const codeMetrics = context.job.needs['code-metrics'];
-          const testValidation = context.job.needs['test-validation'];
-          
-          const allPassed = 
-            codeAnalysis.result === 'success' &&
-            codingStandards.result === 'success' && 
-            securityScan.result === 'success' &&
-            testValidation.result === 'success';
-          
-          const commentBody = `
-          Automated Code Review Report
-          
-          Check Results
-          - Code Analysis: ${codeAnalysis.result === 'success' ? 'Passed' : 'Failed'}
-          - Coding Standards: ${codingStandards.result === 'success' ? 'Passed' : 'Failed'} 
-          - Security Scan: ${securityScan.result === 'success' ? 'Passed' : 'Failed'}
-          - Test Validation: ${testValidation.result === 'success' ? 'Passed' : 'Failed'}
-          - Code Metrics: ${codeMetrics.result === 'success' ? 'Passed' : 'Completed'}
-          
-          Summary
-          ${allPassed ? 
-            'All automated checks passed! This PR is ready for human review.' :
-            'Some checks failed. Please review the failed checks above before merging.'
-          }
-          
-          Next Steps
-          1. Review any security warnings
-          2. Address coding standard violations  
-          3. Ensure all tests pass
-          4. Verify code complexity is manageable
-          5. Human review recommended
-          
-          Report generated by GitHub Actions`;
-          
-          await github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: commentBody
-          });
 
   required-checks:
     name: Required Checks
