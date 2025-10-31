@@ -130,7 +130,15 @@ jobs:
       run: |
         echo "Creating pull request for dependency updates..."
         
-        git add package.json package-lock.json
+        # Check if package-lock.json exists and is not ignored
+        if [ -f "package-lock.json" ]; then
+          echo "Adding package.json and package-lock.json to git..."
+          git add package.json package-lock.json
+        else
+          echo "Adding package.json to git (no package-lock.json found)..."
+          git add package.json
+        fi
+        
         git commit -m "chore(deps): update dependencies"
         git push origin ${{ env.BRANCH_NAME }}
         
@@ -172,7 +180,19 @@ jobs:
       with:
         node-version: '20.x'
 
-    - name: Generate package-lock.json for audit
+    - name: Check if package-lock.json should be used
+      run: |
+        echo "Checking project lockfile configuration..."
+        if grep -q "package-lock.json" .gitignore; then
+          echo "package-lock.json is in .gitignore, using npm install without lockfile"
+          echo "USE_LOCKFILE=false" >> $GITHUB_ENV
+        else
+          echo "package-lock.json is not in .gitignore, will use lockfile"
+          echo "USE_LOCKFILE=true" >> $GITHUB_ENV
+        fi
+
+    - name: Generate package-lock.json for audit if needed
+      if: env.USE_LOCKFILE == 'true'
       run: |
         echo "Generating package-lock.json for security audit..."
         npm i --package-lock-only
@@ -180,17 +200,25 @@ jobs:
     - name: Run security audit
       run: |
         echo "Running security audit..."
-        npm audit --audit-level high || echo "Security audit completed"
+        if [ "$USE_LOCKFILE" = "true" ] && [ -f "package-lock.json" ]; then
+          npm audit --audit-level high || echo "Security audit completed"
+        else
+          echo "Skipping npm audit (no package-lock.json available)"
+        fi
 
-    - name: Fix security vulnerabilities
+    - name: Fix security vulnerabilities if possible
       run: |
         echo "Attempting to fix security vulnerabilities..."
-        npm audit fix || echo "No automatic fixes available"
+        if [ "$USE_LOCKFILE" = "true" ] && [ -f "package-lock.json" ]; then
+          npm audit fix || echo "No automatic fixes available"
+        else
+          echo "Skipping npm audit fix (no package-lock.json available)"
+        fi
 
     - name: Create security fix PR if changes made
       run: |
-        # Check if fixes were applied
-        if git diff --quiet package.json package-lock.json; then
+        # Check if fixes were applied to package.json
+        if git diff --quiet package.json; then
           echo "No security fixes to apply"
           exit 0
         fi
@@ -202,7 +230,9 @@ jobs:
         
         branch_name="deps/security-fixes-$(date +%Y%m%d)"
         git checkout -b $branch_name
-        git add package.json package-lock.json
+        
+        # Add only package.json (since package-lock.json is ignored)
+        git add package.json
         git commit -m "fix(security): address vulnerability issues"
         git push origin $branch_name
         
@@ -213,7 +243,7 @@ jobs:
           
           ## Changes
           - Applied security patches for vulnerable dependencies
-          - Automated via npm audit fix
+          - Automated security updates
           
           ## Priority: HIGH
           - Addresses critical security vulnerabilities
