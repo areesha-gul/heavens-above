@@ -90,9 +90,10 @@ jobs:
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
 
-    - name: Create update branch
+    - name: Create unique update branch
       run: |
-        branch_name="deps/updates-$(date +%Y%m%d)"
+        # Create a unique branch name with timestamp
+        branch_name="deps/updates-$(date +%Y%m%d-%H%M%S)"
         echo "BRANCH_NAME=$branch_name" >> $GITHUB_ENV
         git checkout -b $branch_name
 
@@ -135,7 +136,9 @@ jobs:
         git add package.json
         
         git commit -m "chore(deps): update dependencies"
-        git push origin ${{ env.BRANCH_NAME }}
+        
+        # Force push to handle case where branch might already exist
+        git push origin ${{ env.BRANCH_NAME }} --force
         
         # Create PR using GitHub CLI
         gh pr create \
