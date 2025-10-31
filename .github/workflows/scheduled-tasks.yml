@@ -135,6 +135,8 @@ jobs:
     - name: Run comprehensive security audit
       run: |
         echo "Running monthly security audit..."
+        mkdir -p reports
+        
         # Run security audit directly without creating script file
         node -e "
         const fs = require('fs');
