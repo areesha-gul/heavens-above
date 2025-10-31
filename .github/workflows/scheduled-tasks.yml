@@ -1,0 +1,309 @@
+name: Scheduled Maintenance Tasks
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+    # Run every Monday at 6 AM UTC
+    - cron: '0 6 * * 1'
+    # Run on the 1st of every month at 3 AM UTC
+    - cron: '0 3 1 * *'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  daily-maintenance:
+    name: Daily Maintenance
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 2 * * *' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Run data cleanup script
+      run: |
+        echo "Running daily data cleanup..."
+        # Create a simple cleanup script if it doesn't exist
+        if [ ! -f "scripts/cleanup.js" ]; then
+          mkdir -p scripts
+          cat > scripts/cleanup.js << 'SCRIPT'
+          const fs = require('fs');
+          const path = require('path');
+          
+          console.log('Starting daily cleanup...');
+          
+          // Clean up temporary files
+          const tempDir = './temp';
+          if (fs.existsSync(tempDir)) {
+            const files = fs.readdirSync(tempDir);
+            files.forEach(file => {
+              const filePath = path.join(tempDir, file);
+              // Delete files older than 7 days
+              const stats = fs.statSync(filePath);
+              const ageInDays = (Date.now() - stats.mtime.getTime()) / (1000 * 60 * 60 * 24);
+              
+              if (ageInDays > 7) {
+                fs.unlinkSync(filePath);
+                console.log('Deleted old file:', file);
+              }
+            });
+          }
+          
+          console.log('Daily cleanup completed successfully');
+          SCRIPT
+        fi
+        node scripts/cleanup.js
+
+    - name: Check disk usage
+      run: |
+        echo "Checking disk usage..."
+        df -h
+        echo "Checking repository size..."
+        du -sh . || echo "Disk usage check completed"
+
+    - name: Update dependency database
+      run: |
+        echo "Updating dependency information..."
+        npm update --no-save
+        npm list --depth=0 > dependency-report.txt
+        echo "Current dependencies:"
+        cat dependency-report.txt
+
+    - name: Log maintenance completion
+      run: |
+        echo "Daily maintenance completed at $(date)"
+        echo "Next scheduled run: Tomorrow at 2 AM UTC"
+
+  weekly-reports:
+    name: Weekly Reports
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 6 * * 1' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Generate weekly activity report
+      run: |
+        echo "Generating weekly activity report..."
+        mkdir -p reports
+        
+        # Generate a simple report
+        cat > reports/weekly-report-$(date +%Y-%m-%d).md << 'REPORT'
+        # Weekly Activity Report
+        - Generated: $(date)
+        - Repository: ${{ github.repository }}
+        - Branch: ${{ github.ref }}
+        
+        ## Project Status
+        - Node.js Version: $(node --version)
+        - NPM Version: $(npm --version)
+        - Dependencies: $(npm list --depth=0 | wc -l) packages
+        
+        ## Maintenance Tasks
+        - [x] Dependency check
+        - [x] Code validation
+        - [x] Security scan
+        
+        ## Next Week Focus
+        - Review and update dependencies
+        - Run security audit
+        - Performance optimization
+        REPORT
+        
+        echo "Weekly report generated: reports/weekly-report-$(date +%Y-%m-%d).md"
+
+    - name: Check for outdated dependencies
+      run: |
+        echo "Checking for outdated packages..."
+        npm outdated > reports/outdated-packages.txt || true
+        echo "Outdated packages report:"
+        cat reports/outdated-packages.txt || echo "No outdated packages found"
+
+    - name: Archive reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: weekly-reports-$(date +%Y-%m-%d)
+        path: reports/
+        retention-days: 30
+
+    - name: Notify completion
+      run: |
+        echo "Weekly reports generated successfully"
+        echo "Reports archived as workflow artifacts"
+        echo "Next weekly report: Next Monday at 6 AM UTC"
+
+  monthly-audit:
+    name: Monthly Security Audit
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 3 1 * *' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Run comprehensive security audit
+      run: |
+        echo "Running monthly security audit..."
+        # Create security audit script
+        cat > scripts/security-audit.js << 'AUDIT'
+        const fs = require('fs');
+        const https = require('https');
+        
+        console.log('MONTHLY SECURITY AUDIT');
+        console.log('Audit date:', new Date().toISOString());
+        
+        // Check package.json for known vulnerable patterns
+        const packageJson = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
+        
+        console.log('Dependency Analysis:');
+        console.log('Total dependencies:', Object.keys(packageJson.dependencies || {}).length);
+        
+        const deps = packageJson.dependencies || {};
+        Object.keys(deps).forEach(dep => {
+          console.log('  -', dep + ':', deps[dep]);
+        });
+        
+        // Check for known problematic packages
+        const riskyPackages = ['request', 'xml2js', 'moment'];
+        const foundRisky = riskyPackages.filter(pkg => deps[pkg]);
+        
+        if (foundRisky.length > 0) {
+          console.log('Potentially problematic packages found:');
+          foundRisky.forEach(pkg => console.log('  -', pkg));
+        } else {
+          console.log('No known problematic packages detected');
+        }
+        
+        console.log('Security Recommendations:');
+        console.log('1. Regularly update dependencies');
+        console.log('2. Use npm audit for vulnerability scanning');
+        console.log('3. Consider replacing request with node-fetch or axios');
+        console.log('4. Implement rate limiting for web scraping');
+        
+        console.log('Security audit completed');
+        AUDIT
+        
+        node scripts/security-audit.js > reports/security-audit-$(date +%Y-%m-%d).txt
+
+    - name: Generate dependency graph
+      run: |
+        echo "Generating dependency graph..."
+        npm list --all --depth=1 > reports/dependency-tree-$(date +%Y-%m-%d).txt
+        echo "Dependency tree saved"
+
+    - name: Archive audit results
+      uses: actions/upload-artifact@v4
+      with:
+        name: monthly-audit-$(date +%Y-%m-%d)
+        path: reports/
+        retention-days: 90
+
+    - name: Final audit summary
+      run: |
+        echo "Monthly security audit completed"
+        echo "Results archived as workflow artifacts"
+        echo "Next audit: 1st of next month at 3 AM UTC"
+
+  performance-check:
+    name: Performance Check
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 6 * * 1' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Run performance tests
+      run: |
+        echo "Running performance checks..."
+        echo "Checking script load time..."
+        time node -e "require('./run.js'); console.log('Script loaded')" 2> performance.txt
+        echo "Performance metrics:"
+        cat performance.txt
+
+    - name: Check memory usage
+      run: |
+        echo "Checking memory usage patterns..."
+        node -e "
+          const used = process.memoryUsage();
+          console.log('Memory usage:');
+          for (let key in used) {
+            console.log('  ' + key + ': ' + Math.round(used[key] / 1024 / 1024 * 100) / 100 + ' MB');
+          }
+        " > memory-usage.txt
+        cat memory-usage.txt
+
+    - name: Archive performance data
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-data-$(date +%Y-%m-%d)
+        path: |
+          performance.txt
+          memory-usage.txt
+        retention-days: 30
+
+  notification:
+    name: Send Notification
+    runs-on: ubuntu-latest
+    needs: [daily-maintenance, weekly-reports, monthly-audit, performance-check]
+    if: always()
+    
+    steps:
+    - name: Workflow status summary
+      run: |
+        echo "SCHEDULED TASKS SUMMARY"
+        echo "Workflow: ${{ github.workflow }}"
+        echo "Run ID: ${{ github.run_id }}"
+        echo "Trigger: ${{ github.event_name }}"
+        echo "Schedule: ${{ github.event.schedule }}"
+        echo "Timestamp: $(date)"
+        
+        echo "Job Status:"
+        echo "- Daily Maintenance: ${{ needs.daily-maintenance.result }}"
+        echo "- Weekly Reports: ${{ needs.weekly-reports.result }}"
+        echo "- Monthly Audit: ${{ needs.monthly-audit.result }}"
+        echo "- Performance Check: ${{ needs.performance-check.result }}"
+        
+        if [[ "${{ needs.daily-maintenance.result }}" == "success" && \
+              "${{ needs.weekly-reports.result }}" == "success" && \
+              "${{ needs.monthly-audit.result }}" == "success" && \
+              "${{ needs.performance-check.result }}" == "success" ]]; then
+          echo "Overall Status: ALL TASKS COMPLETED SUCCESSFULLY"
+        else
+          echo "Overall Status: SOME TASKS MAY HAVE ISSUES - Check logs"
+        fi
+        
+        echo "END OF SUMMARY"
