@@ -1,8 +1,7 @@
 name: Continuous Integration
 
 on:
-  push:
-    branches: [ main, master ]
+  workflow_dispatch:
   pull_request:
     branches: [ main, master ]
 
@@ -23,7 +22,6 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
-        # REMOVED cache line to fix the error
 
     - name: Install dependencies
       run: npm install
@@ -113,7 +111,6 @@ jobs:
     - name: Basic security scan
       run: |
         echo "Running basic security checks..."
-        # Check for known vulnerable packages without failing
         echo "Checking request package (known issues)..."
         npm list request || true
         
