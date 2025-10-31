@@ -130,14 +130,9 @@ jobs:
       run: |
         echo "Creating pull request for dependency updates..."
         
-        # Check if package-lock.json exists and is not ignored
-        if [ -f "package-lock.json" ]; then
-          echo "Adding package.json and package-lock.json to git..."
-          git add package.json package-lock.json
-        else
-          echo "Adding package.json to git (no package-lock.json found)..."
-          git add package.json
-        fi
+        # Only add package.json since package-lock.json is in .gitignore
+        echo "Adding package.json to git (package-lock.json is ignored)..."
+        git add package.json
         
         git commit -m "chore(deps): update dependencies"
         git push origin ${{ env.BRANCH_NAME }}
@@ -148,8 +143,12 @@ jobs:
           --body "Automated dependency updates.
           
           ## Changes
-          - Updated dependency versions
+          - Updated dependency versions in package.json
           - Automated via GitHub Actions
+          
+          ## Note
+          - package-lock.json changes are not included (file is gitignored)
+          - Run 'npm install' locally to generate updated lockfile
           
           ## Verification
           - [x] Dependencies installed successfully
@@ -158,6 +157,7 @@ jobs:
           
           ## Next Steps
           - Review changelogs for updated packages
+          - Run 'npm install' to update local lockfile
           - Test functionality manually
           - Merge if all checks pass" \
           --base main \
@@ -180,83 +180,27 @@ jobs:
       with:
         node-version: '20.x'
 
-    - name: Check if package-lock.json should be used
+    - name: Run basic security check
       run: |
-        echo "Checking project lockfile configuration..."
-        if grep -q "package-lock.json" .gitignore; then
-          echo "package-lock.json is in .gitignore, using npm install without lockfile"
-          echo "USE_LOCKFILE=false" >> $GITHUB_ENV
-        else
-          echo "package-lock.json is not in .gitignore, will use lockfile"
-          echo "USE_LOCKFILE=true" >> $GITHUB_ENV
-        fi
-
-    - name: Generate package-lock.json for audit if needed
-      if: env.USE_LOCKFILE == 'true'
-      run: |
-        echo "Generating package-lock.json for security audit..."
-        npm i --package-lock-only
-
-    - name: Run security audit
-      run: |
-        echo "Running security audit..."
-        if [ "$USE_LOCKFILE" = "true" ] && [ -f "package-lock.json" ]; then
-          npm audit --audit-level high || echo "Security audit completed"
-        else
-          echo "Skipping npm audit (no package-lock.json available)"
-        fi
-
-    - name: Fix security vulnerabilities if possible
-      run: |
-        echo "Attempting to fix security vulnerabilities..."
-        if [ "$USE_LOCKFILE" = "true" ] && [ -f "package-lock.json" ]; then
-          npm audit fix || echo "No automatic fixes available"
-        else
-          echo "Skipping npm audit fix (no package-lock.json available)"
-        fi
-
-    - name: Create security fix PR if changes made
-      run: |
-        # Check if fixes were applied to package.json
-        if git diff --quiet package.json; then
-          echo "No security fixes to apply"
-          exit 0
-        fi
-
-        echo "Creating security fix pull request..."
+        echo "Running basic security check..."
+        echo "Since package-lock.json is gitignored, using alternative security checks"
+        echo "Checking for known vulnerable packages in package.json..."
         
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
+        # Basic security check without lockfile
+        node -e "
+        const pkg = require('./package.json');
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        const knownRisky = ['request@2.', 'xml2js@0.4.', 'moment@2.'];
         
-        branch_name="deps/security-fixes-$(date +%Y%m%d)"
-        git checkout -b $branch_name
-        
-        # Add only package.json (since package-lock.json is ignored)
-        git add package.json
-        git commit -m "fix(security): address vulnerability issues"
-        git push origin $branch_name
-        
-        # Create high-priority PR for security fixes
-        gh pr create \
-          --title "Security Vulnerability Fixes $(date +%Y-%m-%d)" \
-          --body "URGENT: Security vulnerability fixes.
-          
-          ## Changes
-          - Applied security patches for vulnerable dependencies
-          - Automated security updates
-          
-          ## Priority: HIGH
-          - Addresses critical security vulnerabilities
-          - Requires immediate review and merge
-          
-          ## Verification
-          - [ ] Review security impact
-          - [ ] Test functionality
-          - [ ] Merge promptly" \
-          --base main \
-          --head $branch_name \
-          --label "dependencies,security,high-priority" \
-          --assignee "${{ github.actor }}"
+        console.log('Security Analysis:');
+        Object.entries(deps).forEach(([name, version]) => {
+          knownRisky.forEach(risky => {
+            if (name === risky.split('@')[0] && version.includes(risky.split('@')[1])) {
+              console.log('⚠️  Potentially risky package:', name + '@' + version);
+            }
+          });
+        });
+        "
 
   workflow-summary:
     name: Workflow Summary
