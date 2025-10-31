@@ -42,6 +42,9 @@ jobs:
     - name: Install npm-check-updates
       run: npm install -g npm-check-updates
 
+    - name: Install dependencies for scanning
+      run: npm install --package-lock-only
+
     - name: Scan for available updates
       run: |
         echo "Scanning for dependency updates..."
@@ -152,7 +155,9 @@ jobs:
       run: |
         echo "Creating pull request for dependency updates..."
         
-        git add package.json package-lock.json
+        # Force add package-lock.json if it's ignored
+        git add -f package.json package-lock.json
+        
         git commit -m "chore(deps): update dependencies"
         git push origin ${{ env.BRANCH_NAME }}
         
@@ -201,6 +206,11 @@ jobs:
       with:
         node-version: '20.x'
 
+    - name: Install dependencies and generate lockfile
+      run: |
+        echo "Installing dependencies to generate lockfile..."
+        npm install --package-lock-only
+
     - name: Run security audit
       run: |
         echo "Running security audit..."
@@ -233,7 +243,7 @@ jobs:
         
         branch_name="deps/security-fixes-$(date +%Y%m%d)"
         git checkout -b $branch_name
-        git add package.json package-lock.json
+        git add -f package.json package-lock.json
         git commit -m "fix(security): address vulnerability issues"
         git push origin $branch_name
         
