@@ -14,6 +14,11 @@ on:
         - staging
         - production
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 env:
   NODE_VERSION: '20.x'
 
@@ -39,16 +44,19 @@ jobs:
         echo "Verifying application..."
         node -e "require('./run.js'); console.log('Application verified successfully')"
 
-    - name: Build project (GitHub Pages)
+    - name: Prepare static site (GitHub Pages)
       run: |
         echo "Building static site..."
-        mkdir -p build
-        cp -r * build/
+        rm -rf build
+        mkdir build
+        shopt -s extglob
+        cp -r !(build) build/
+        echo "Static site created inside /build"
 
-    - name: Upload build artifacts
+    - name: Upload static site artifact
       uses: actions/upload-pages-artifact@v3
       with:
-        path: build/
+        path: ./build
 
   security-scan:
     name: Security Scan
@@ -102,13 +110,9 @@ jobs:
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
     environment:
       name: github-pages
-    
-    permissions:
-      pages: write
-      id-token: write
 
     steps:
-    - name: Deploy to GitHub Pages
+    - name: Deploy static site to GitHub Pages
       id: deployment
       uses: actions/deploy-pages@v4
 
@@ -118,14 +122,10 @@ jobs:
     needs: [build, security-scan, deploy-staging]
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
     environment:
-      name: production
+      name: github-pages
 
-    permissions:
-      pages: write
-      id-token: write
-    
     steps:
-    - name: Deploy to GitHub Pages (Production)
+    - name: Deploy static site to GitHub Pages (Production)
       id: deployment
       uses: actions/deploy-pages@v4
 
@@ -147,13 +147,13 @@ jobs:
         echo ""
         echo "PIPELINE STATUS:"
         echo "- Build: ${{ needs.build.result }}"
-        echo "- Security Scan: ${{ needs.security-scan.result }}"
-        echo "- Staging Deployment: ${{ needs.deploy-staging.result }}"
-        echo "- Production Deployment: ${{ needs.deploy-production.result }}"
+        echo "- Security Scan: ${{ needs['security-scan'].result }}"
+        echo "- Staging Deployment: ${{ needs['deploy-staging'].result }}"
+        echo "- Production Deployment: ${{ needs['deploy-production'].result }}"
         echo ""
         if [[ "${{ needs.build.result }}" == "success" && \
-              "${{ needs.security-scan.result }}" == "success" && \
-              "${{ needs.deploy-staging.result }}" == "success" ]]; then
+              "${{ needs['security-scan'].result }}" == "success" && \
+              "${{ needs['deploy-staging'].result }}" == "success" ]]; then
           echo "OVERALL STATUS: PIPELINE SUCCESS"
           echo "All stages completed successfully"
         else
