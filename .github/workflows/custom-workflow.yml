@@ -1,6 +1,7 @@
-name: Custom CI/CD Workflow - Code Quality, Performance & Data Sync
+name: Custom Workflow - Code Quality & Performance Analysis
 
 on:
+  # Trigger on push and pull requests
   push:
     branches:
       - main
@@ -9,6 +10,8 @@ on:
     branches:
       - main
       - master
+  
+  # Manual trigger with options
   workflow_dispatch:
     inputs:
       run_tests:
@@ -25,133 +28,304 @@ on:
 env:
   NODE_VERSION: '18.x'
 
-permissions:
-  contents: read
-  id-token: write
-
 jobs:
   code-quality-analysis:
-    name: Code Quality & Performance Analysis
+    name: Code Quality & Dependency Analysis
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
+          fetch-depth: 0  # Full history for better analysis
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-
+      
       - name: Install Dependencies
         run: |
           echo "📦 Installing dependencies..."
           npm install
           echo "✅ Dependencies installed"
-
-      - name: Analyze Dependencies
+      
+      - name: Analyze Dependencies for Vulnerabilities
         run: |
           echo "🔍 Running security audit..."
           npm audit --json > audit-report.json || true
-          echo "Security audit completed"
-
-      - name: Check Outdated Packages
+          
+          # Count vulnerabilities
+          CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' audit-report.json)
+          HIGH=$(jq '.metadata.vulnerabilities.high // 0' audit-report.json)
+          MODERATE=$(jq '.metadata.vulnerabilities.moderate // 0' audit-report.json)
+          LOW=$(jq '.metadata.vulnerabilities.low // 0' audit-report.json)
+          
+          echo "Security Audit Results:"
+          echo "🔴 Critical: $CRITICAL"
+          echo "🟠 High: $HIGH"
+          echo "🟡 Moderate: $MODERATE"
+          echo "🟢 Low: $LOW"
+          
+          # Create summary
+          cat > security-summary.md << EOF
+          # 🔒 Security Audit Report
+          
+          **Scan Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ## Vulnerability Summary
+          - 🔴 **Critical:** $CRITICAL
+          - 🟠 **High:** $HIGH
+          - 🟡 **Moderate:** $MODERATE
+          - 🟢 **Low:** $LOW
+          
+          ## Recommendations
+          $([ $CRITICAL -gt 0 ] && echo "⚠️ URGENT: Critical vulnerabilities found! Update dependencies immediately." || echo "✅ No critical vulnerabilities detected")
+          
+          ---
+          Full report available in artifacts
+          EOF
+      
+      - name: Check Outdated Dependencies
         run: |
-          echo "📊 Checking outdated packages..."
+          echo "📊 Checking for outdated packages..."
           npm outdated --json > outdated-packages.json || true
-          echo "Outdated check completed"
-
-      - name: Analyze Code Metrics
+          
+          # Count outdated packages
+          OUTDATED_COUNT=$(jq 'length' outdated-packages.json)
+          
+          echo "Outdated packages: $OUTDATED_COUNT"
+          
+          if [ $OUTDATED_COUNT -gt 0 ]; then
+            echo "⚠️ Found $OUTDATED_COUNT outdated packages"
+            jq -r 'to_entries[] | "- \(.key): \(.value.current) → \(.value.latest)"' outdated-packages.json > outdated-list.txt
+          else
+            echo "✅ All packages are up to date"
+          fi
+      
+      - name: Analyze Code Complexity
         run: |
-          echo "📈 Calculating code metrics..."
+          echo "📈 Analyzing code complexity..."
+          
+          # Count JavaScript files
           JS_FILES=$(find . -name "*.js" -not -path "./node_modules/*" | wc -l)
+          
+          # Count lines of code
           TOTAL_LINES=$(find . -name "*.js" -not -path "./node_modules/*" -exec cat {} \; | wc -l)
-          AVG_SIZE=$((JS_FILES > 0 ? TOTAL_LINES / JS_FILES : 0))
-          echo "JavaScript files: $JS_FILES, Total lines: $TOTAL_LINES, Average: $AVG_SIZE lines"
-          echo "{\"javascript_files\":$JS_FILES,\"total_lines\":$TOTAL_LINES,\"average_file_size\":$AVG_SIZE}" > code-metrics.json
-
-      - name: Generate Release Notes
+          
+          # Calculate average file size
+          if [ $JS_FILES -gt 0 ]; then
+            AVG_SIZE=$((TOTAL_LINES / JS_FILES))
+          else
+            AVG_SIZE=0
+          fi
+          
+          echo "Code Statistics:"
+          echo "📄 JavaScript Files: $JS_FILES"
+          echo "📝 Total Lines: $TOTAL_LINES"
+          echo "📊 Average File Size: $AVG_SIZE lines"
+          
+          # Create code metrics report
+          cat > code-metrics.json << EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "javascript_files": $JS_FILES,
+            "total_lines": $TOTAL_LINES,
+            "average_file_size": $AVG_SIZE,
+            "commit": "${{ github.sha }}"
+          }
+          EOF
+      
+      - name: Generate Release Notes (On Main Branch)
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
           echo "📝 Generating release notes..."
+          
+          # Get latest tag
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          
+          # Get commits since last tag
           COMMITS=$(git log $LATEST_TAG..HEAD --oneline --pretty=format:"- %s (%h)" | head -20)
+          
+          # Get changed files
           CHANGED_FILES=$(git diff --name-only $LATEST_TAG..HEAD | wc -l)
+          
+          # Create release notes
           cat > RELEASE_NOTES.md << EOF
-# Release Notes - $(date +%Y-%m-%d)
-
-## 📦 What's Changed Since $LATEST_TAG
-
-### Commits
-$COMMITS
-
-### Statistics
-- Changed Files: $CHANGED_FILES
-- Total Commits: $(git rev-list $LATEST_TAG..HEAD --count)
-- Contributors: $(git log $LATEST_TAG..HEAD --format='%an' | sort -u | wc -l)
-
-### Code Metrics
-- JavaScript Files: $(jq .javascript_files code-metrics.json)
-- Total Lines of Code: $(jq .total_lines code-metrics.json)
-
----
-*Auto-generated by GitHub Actions*
-EOF
-          echo "✅ Release notes created"
-
-      - name: Performance Benchmark
-        if: github.event.inputs.analyze_performance || github.event_name == 'workflow_dispatch'
+          # Release Notes - $(date +%Y-%m-%d)
+          
+          ## 📦 What's Changed Since $LATEST_TAG
+          
+          ### Commits
+          $COMMITS
+          
+          ### Statistics
+          - **Changed Files:** $CHANGED_FILES
+          - **Total Commits:** $(git rev-list $LATEST_TAG..HEAD --count)
+          - **Contributors:** $(git log $LATEST_TAG..HEAD --format='%an' | sort -u | wc -l)
+          
+          ### Code Metrics
+          - **JavaScript Files:** $(jq .javascript_files code-metrics.json)
+          - **Total Lines of Code:** $(jq .total_lines code-metrics.json)
+          
+          ### Security Status
+          - **Critical Vulnerabilities:** $(jq '.metadata.vulnerabilities.critical // 0' audit-report.json)
+          - **High Vulnerabilities:** $(jq '.metadata.vulnerabilities.high // 0' audit-report.json)
+          
+          ---
+          *Auto-generated by GitHub Actions*
+          EOF
+          
+          echo "✅ Release notes generated"
+      
+      - name: Performance Benchmarking
+        if: inputs.analyze_performance || github.event_name == 'workflow_dispatch'
         run: |
           echo "⚡ Running performance benchmark..."
+          
+          # Measure script execution time
           START_TIME=$(date +%s)
-          timeout 60s node run.js || echo "Execution completed"
+          
+          # Run a dry-run or test execution (adjust based on your script)
+          timeout 60s node run.js || echo "Script execution completed or timed out"
+          
           END_TIME=$(date +%s)
           DURATION=$((END_TIME - START_TIME))
+          
           echo "Execution time: ${DURATION}s"
-          echo "{\"execution_time_seconds\":$DURATION}" > performance-report.json
-
-      - name: Upload Artifacts
+          
+          # Create performance report
+          cat > performance-report.json << EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "execution_time_seconds": $DURATION,
+            "node_version": "${{ env.NODE_VERSION }}",
+            "runner_os": "${{ runner.os }}",
+            "commit": "${{ github.sha }}"
+          }
+          EOF
+      
+      - name: Create Workflow Summary
+        run: |
+          echo "# 📊 Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🔒 Security Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- Critical: $(jq '.metadata.vulnerabilities.critical // 0' audit-report.json)" >> $GITHUB_STEP_SUMMARY
+          echo "- High: $(jq '.metadata.vulnerabilities.high // 0' audit-report.json)" >> $GITHUB_STEP_SUMMARY
+          echo "- Moderate: $(jq '.metadata.vulnerabilities.moderate // 0' audit-report.json)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 📦 Dependencies" >> $GITHUB_STEP_SUMMARY
+          OUTDATED=$(jq 'length' outdated-packages.json 2>/dev/null || echo "0")
+          echo "- Outdated packages: $OUTDATED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 📈 Code Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "- JavaScript files: $(jq .javascript_files code-metrics.json)" >> $GITHUB_STEP_SUMMARY
+          echo "- Total lines: $(jq .total_lines code-metrics.json)" >> $GITHUB_STEP_SUMMARY
+          echo "- Average file size: $(jq .average_file_size code-metrics.json) lines" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f performance-report.json ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ⚡ Performance" >> $GITHUB_STEP_SUMMARY
+            echo "- Execution time: $(jq .execution_time_seconds performance-report.json)s" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Upload Analysis Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: code-analysis-${{ github.run_number }}
+          name: analysis-reports-${{ github.run_number }}
           path: |
             audit-report.json
+            security-summary.md
             outdated-packages.json
             code-metrics.json
-            RELEASE_NOTES.md
             performance-report.json
+            RELEASE_NOTES.md
           retention-days: 30
+      
+      - name: Comment on PR (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Read security summary
+            let summary = '## 🤖 Automated Code Analysis\n\n';
+            
+            try {
+              const securitySummary = fs.readFileSync('security-summary.md', 'utf8');
+              summary += securitySummary + '\n\n';
+            } catch (e) {
+              summary += '⚠️ Could not read security summary\n\n';
+            }
+            
+            // Read code metrics
+            try {
+              const metrics = JSON.parse(fs.readFileSync('code-metrics.json', 'utf8'));
+              summary += `### 📊 Code Metrics\n`;
+              summary += `- JavaScript files: ${metrics.javascript_files}\n`;
+              summary += `- Total lines: ${metrics.total_lines}\n`;
+              summary += `- Average file size: ${metrics.average_file_size} lines\n\n`;
+            } catch (e) {
+              summary += '⚠️ Could not read code metrics\n\n';
+            }
+            
+            summary += '---\n*Generated by Custom Workflow*';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
 
   sync-data-systems:
     name: Data System Synchronization
     runs-on: ubuntu-latest
     needs: code-quality-analysis
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-
+    
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Simulate Data Sync
+      
+      - name: Simulate Data Sync to External Systems
         run: |
-Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-
-- Cloud Storage: Success
-- Database: Success
-
-Status: Completed successfully
-EOF
+          echo "🔄 Syncing data to external systems..."
+          
+          # Example: This could sync scraped data to a database, cloud storage, etc.
+          # For demonstration, we'll create a sync report
+          
+          cat > sync-report.md << EOF
+          # Data Synchronization Report
+          
+          **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Commit:** ${{ github.sha }}
+          
+          ## Sync Status
+          
+          ### Simulated External Systems
+          - ✅ Cloud Storage: Success
+          - ✅ Database: Success  
+          - ✅ Backup System: Success
+          
+          ### Sync Statistics
+          - Files processed: Calculated from public/data directory
+          - Sync duration: < 1 minute
+          - Status: Completed successfully
+          
+          ---
+          *This is a simulated sync. Configure actual endpoints in repository secrets.*
+          EOF
+          
           echo "✅ Data sync completed"
-
+      
+      - name: Upload Sync Report
         uses: actions/upload-artifact@v4
         with:
           name: sync-report-${{ github.run_number }}
           path: sync-report.md
           retention-days: 15
-      - name: Upload Sync Report
-- Backup System: Success
-## Sync Status
-Commit: ${{ github.sha }}
-
