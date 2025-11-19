@@ -1,4 +1,4 @@
-name: Dependency Updates
+name: Dependency Management
 
 on:
   workflow_dispatch:
