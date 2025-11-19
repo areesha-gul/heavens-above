@@ -1,482 +1,226 @@
-name: Dependency Management
+name: Deployment Pipeline
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      update_type:
-        description: 'Type of updates to apply'
-        required: true
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-          - all
-        default: 'minor'
-      run_tests:
-        description: 'Run tests after update'
-        required: false
-        type: boolean
-        default: true
-  
-  schedule:
-    # Run weekly on Sunday at midnight UTC
-    - cron: '0 0 * * 0'
-  
-  # Also run monthly for major updates
-  # - cron: '0 0 1 * *'
+
+env:
+  NODE_VERSION: '18'
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  checks: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
-  # Job 1: Check and Analyze Dependencies
-  analyze-dependencies:
-    name: 📊 Analyze Dependencies
+  build:
     runs-on: ubuntu-latest
-    outputs:
-      has_updates: ${{ steps.check.outputs.has_updates }}
-      update_count: ${{ steps.check.outputs.update_count }}
-      critical_count: ${{ steps.check.outputs.critical_count }}
-      security_updates: ${{ steps.security.outputs.has_vulnerabilities }}
     
     steps:
-      - name: 🧩 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
       
-      - name: ⚙️ Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
       
-      - name: 📦 Install Current Dependencies
+      - name: Install dependencies
         run: |
           if [ -f package-lock.json ]; then
-            echo "📦 Using npm ci..."
             npm ci
-          else
-            echo "📦 Using npm install..."
+          elif [ -f package.json ]; then
             npm install
-          fi
-      
-      - name: 🔍 Check for Outdated Dependencies
-        id: check
-        run: |
-          echo "🔍 Checking for outdated packages..."
-          mkdir -p reports
-          
-          # Get outdated packages
-          npm outdated --json > reports/outdated.json || true
-          
-          # Count updates
-          if [ -s reports/outdated.json ] && [ "$(cat reports/outdated.json)" != "{}" ]; then
-            UPDATE_COUNT=$(jq 'length' reports/outdated.json)
-            echo "has_updates=true" >> $GITHUB_OUTPUT
-            echo "update_count=$UPDATE_COUNT" >> $GITHUB_OUTPUT
-            
-            echo "📊 Found $UPDATE_COUNT outdated packages"
           else
-            echo "has_updates=false" >> $GITHUB_OUTPUT
-            echo "update_count=0" >> $GITHUB_OUTPUT
-            echo "✅ All dependencies are up-to-date!"
-          fi
-          
-          # Check for critical updates (major versions)
-          CRITICAL_COUNT=$(jq '[.[] | select(.current != .latest)] | length' reports/outdated.json 2>/dev/null || echo "0")
-          echo "critical_count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
-      
-      - name: 🔒 Security Vulnerability Scan
-        id: security
-        run: |
-          echo "🔒 Running security audit..."
-          
-          npm audit --json > reports/audit.json || true
-          
-          # Check for vulnerabilities
-          if [ -f reports/audit.json ]; then
-            CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' reports/audit.json)
-            HIGH=$(jq '.metadata.vulnerabilities.high // 0' reports/audit.json)
-            MODERATE=$(jq '.metadata.vulnerabilities.moderate // 0' reports/audit.json)
-            LOW=$(jq '.metadata.vulnerabilities.low // 0' reports/audit.json)
-            
-            echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
-            echo "high=$HIGH" >> $GITHUB_OUTPUT
-            echo "moderate=$MODERATE" >> $GITHUB_OUTPUT
-            echo "low=$LOW" >> $GITHUB_OUTPUT
-            
-            if [ $CRITICAL -gt 0 ] || [ $HIGH -gt 0 ]; then
-              echo "has_vulnerabilities=true" >> $GITHUB_OUTPUT
-              echo "🚨 Found vulnerabilities: Critical=$CRITICAL, High=$HIGH"
-            else
-              echo "has_vulnerabilities=false" >> $GITHUB_OUTPUT
-              echo "✅ No critical vulnerabilities found"
-            fi
+            echo "⚠ No package.json found"
           fi
       
-      - name: 📋 Generate Dependency Report
+      - name: Build application
         run: |
-          cat > reports/dependency-analysis.md << 'EOF'
-          # 📊 Dependency Analysis Report
-          
-          **Analysis Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          **Repository:** ${{ github.repository }}
-          **Branch:** ${{ github.ref_name }}
-          
-          ## Summary
-          - **Outdated Packages:** ${{ steps.check.outputs.update_count }}
-          - **Critical Updates:** ${{ steps.check.outputs.critical_count }}
-          
-          ## Security Status
-          - 🔴 **Critical:** ${{ steps.security.outputs.critical }}
-          - 🟠 **High:** ${{ steps.security.outputs.high }}
-          - 🟡 **Moderate:** ${{ steps.security.outputs.moderate }}
-          - 🟢 **Low:** ${{ steps.security.outputs.low }}
-          
-          ## Outdated Packages
-          EOF
-          
-          # Add outdated package details
-          if [ -s reports/outdated.json ]; then
-            echo "" >> reports/dependency-analysis.md
-            jq -r 'to_entries[] | "- **\(.key)**: \(.value.current) → \(.value.latest) (wanted: \(.value.wanted))"' reports/outdated.json >> reports/dependency-analysis.md
+          if [ -f package.json ]; then
+            npm run build || echo "No build script found, using static files"
           else
-            echo "✅ All packages are up-to-date" >> reports/dependency-analysis.md
+            echo "No package.json, deploying static files"
           fi
-          
-          cat >> reports/dependency-analysis.md << 'EOF'
-          
-          ---
-          *Generated by GitHub Actions*
-          EOF
+        env:
+          CI: true
+          NODE_ENV: production
       
-      - name: 📤 Upload Analysis Report
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dependency-analysis-${{ github.run_number }}
-          path: reports/
-          retention-days: 90
+          name: build-artifacts
+          path: |
+            dist/
+            build/
+            public/
+            index.html
+            *.html
+            *.css
+            *.js
+          retention-days: 1
 
-  # Job 2: Apply Updates with Versioning Policy
-  apply-updates:
-    name: 🔄 Apply Dependency Updates
+  test:
     runs-on: ubuntu-latest
-    needs: analyze-dependencies
-    if: needs.analyze-dependencies.outputs.has_updates == 'true'
-    
-    strategy:
-      matrix:
-        update_type: [security, patch, minor]
+    needs: build
     
     steps:
-      - name: 🧩 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
       
-      - name: ⚙️ Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
       
-      - name: 📦 Install Dependencies
+      - name: Install dependencies
         run: |
           if [ -f package-lock.json ]; then
             npm ci
-          else
+          elif [ -f package.json ]; then
             npm install
-          fi
-      
-      - name: 🔄 Apply ${{ matrix.update_type }} Updates
-        id: update
-        run: |
-          echo "🔄 Applying ${{ matrix.update_type }} updates..."
-          
-          case "${{ matrix.update_type }}" in
-            security)
-              echo "🔒 Fixing security vulnerabilities..."
-              npm audit fix --audit-level=moderate || true
-              ;;
-            patch)
-              echo "🩹 Updating patch versions..."
-              npm update --depth 0 || true
-              ;;
-            minor)
-              echo "📦 Updating minor versions..."
-              npm update || true
-              ;;
-          esac
-          
-          # Check if anything changed
-          if git diff --quiet package.json package-lock.json 2>/dev/null; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "ℹ️ No changes for ${{ matrix.update_type }} updates"
           else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "✅ Applied ${{ matrix.update_type }} updates"
+            echo "⚠ No package.json found, skipping tests"
+            exit 0
           fi
       
-      - name: 📝 Generate Update Summary
-        if: steps.update.outputs.has_changes == 'true'
+      - name: Run linting
         run: |
-          cat > update-summary-${{ matrix.update_type }}.md << EOF
-          # 🔄 Dependency Update Summary - ${{ matrix.update_type }}
-          
-          **Update Type:** ${{ matrix.update_type }}
-          **Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          
-          ## Changes
-          \`\`\`diff
-          $(git diff package.json)
-          \`\`\`
-          
-          ## Package Lock Changes
-          Package-lock.json has been updated accordingly.
-          
-          ---
-          *Automated update by GitHub Actions*
-          EOF
-      
-      - name: 📤 Upload Update Summary
-        if: steps.update.outputs.has_changes == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: update-summary-${{ matrix.update_type }}-${{ github.run_number }}
-          path: update-summary-${{ matrix.update_type }}.md
-          retention-days: 30
-      
-      - name: 💾 Commit Changes
-        if: steps.update.outputs.has_changes == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add package.json package-lock.json 2>/dev/null || git add package.json
-          
-          git commit -m "chore(deps): apply ${{ matrix.update_type }} updates" \
-                     -m "Updated dependencies via automated workflow" \
-                     -m "Update type: ${{ matrix.update_type }}" \
-                     -m "Workflow run: #${{ github.run_number }}"
-      
-      - name: 🔀 Create Update Branch
-        if: steps.update.outputs.has_changes == 'true'
-        run: |
-          BRANCH_NAME="deps/${{ matrix.update_type }}-updates-${{ github.run_number }}"
-          git checkout -b $BRANCH_NAME
-          git push origin $BRANCH_NAME
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-        id: branch
-
-  # Job 3: Test Compatibility
-  test-updates:
-    name: 🧪 Test Updated Dependencies
-    runs-on: ubuntu-latest
-    needs: [analyze-dependencies, apply-updates]
-    if: |
-      needs.analyze-dependencies.outputs.has_updates == 'true' &&
-      (github.event.inputs.run_tests == 'true' || github.event.inputs.run_tests == '')
-    
-    steps:
-      - name: 🧩 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          ref: deps/security-updates-${{ github.run_number }}
-      
-      - name: ⚙️ Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      
-      - name: 📦 Install Updated Dependencies
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
+          if grep -q '"lint"' package.json 2>/dev/null; then
+            npm run lint
           else
-            npm install
+            echo "✓ No lint script found, skipping"
           fi
-      
-      - name: 🧪 Run Tests
-        id: test
         continue-on-error: true
+      
+      - name: Run unit tests
         run: |
-          echo "🧪 Running tests..."
-          
-          # Check if test script exists
-          if npm run | grep -q "test"; then
-            npm test || echo "test_failed=true" >> $GITHUB_OUTPUT
+          if grep -q '"test"' package.json 2>/dev/null; then
+            npm test -- --coverage --passWithNoTests
           else
-            echo "⚠️ No test script found in package.json"
-            echo "test_skipped=true" >> $GITHUB_OUTPUT
+            echo "✓ No test script found, skipping"
+          fi
+        env:
+          CI: true
+        continue-on-error: true
+      
+      - name: Security audit
+        run: |
+          if [ -f package.json ]; then
+            npm audit --production --audit-level=moderate || echo "⚠ Vulnerabilities found"
+          fi
+        continue-on-error: true
+      
+      - name: Dependency check
+        run: |
+          if [ -f package.json ]; then
+            echo "📦 Checking for outdated packages..."
+            npm outdated || true
           fi
       
-      - name: 🔍 Verify Installation
+      - name: HTML validation
         run: |
-          echo "🔍 Verifying installation..."
-          
-          # Check for installation issues
-          npm list --depth=0 || echo "⚠️ Some dependencies have issues"
-          
-          # Verify main script can be loaded
-          if [ -f "run.js" ]; then
-            node -c run.js && echo "✅ Main script syntax valid"
-          fi
+          echo "🔍 Validating HTML files..."
+          find . -name "*.html" -not -path "./node_modules/*" -exec echo "Found: {}" \;
       
-      - name: 📊 Generate Test Report
-        run: |
-          cat > test-report.md << EOF
-          # 🧪 Compatibility Test Report
-          
-          **Test Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          **Node Version:** $(node --version)
-          **NPM Version:** $(npm --version)
-          
-          ## Test Results
-          - **Tests Run:** ${{ steps.test.outputs.test_skipped == 'true' && 'Skipped (no test script)' || 'Completed' }}
-          - **Status:** ${{ steps.test.outputs.test_failed == 'true' && '❌ Failed' || '✅ Passed' }}
-          
-          ## Installation Verification
-          - ✅ Dependencies installed successfully
-          - ✅ No critical installation errors
-          
-          ---
-          *Automated test by GitHub Actions*
-          EOF
-      
-      - name: 📤 Upload Test Report
+      - name: Upload test results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-report-${{ github.run_number }}
-          path: test-report.md
-          retention-days: 30
+          name: test-results
+          path: |
+            coverage/
+            test-results/
+          retention-days: 7
+        continue-on-error: true
 
-  # Job 4: Create Pull Request with Review
-  create-pr:
-    name: 📬 Create Pull Request
+  deploy:
     runs-on: ubuntu-latest
-    needs: [analyze-dependencies, apply-updates, test-updates]
-    if: |
-      always() &&
-      needs.analyze-dependencies.outputs.has_updates == 'true' &&
-      !contains(needs.*.result, 'failure')
+    needs: [build, test]
+    
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     
     steps:
-      - name: 🧩 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
       
-      - name: 📥 Download All Reports
+      - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: reports/
+          name: build-artifacts
+        continue-on-error: true
       
-      - name: 📝 Generate PR Description
-        id: pr_body
+      - name: Determine publish directory
+        id: publish-dir
         run: |
-          cat > pr-body.md << 'EOF'
-          ## 🔄 Automated Dependency Updates
-          
-          This PR contains automated dependency updates generated by GitHub Actions.
-          
-          ### 📊 Update Summary
-          - **Total Updates:** ${{ needs.analyze-dependencies.outputs.update_count }}
-          - **Critical Updates:** ${{ needs.analyze-dependencies.outputs.critical_count }}
-          - **Security Fixes:** ${{ needs.analyze-dependencies.outputs.security_updates == 'true' && 'Yes' || 'No' }}
-          
-          ### 🔒 Security Status
-          All security vulnerabilities have been addressed in this update.
-          
-          ### 🧪 Testing
-          - ✅ Compatibility tests passed
-          - ✅ Installation verification completed
-          - ✅ No breaking changes detected
-          
-          ### 📋 Review Checklist
-          - [ ] Review dependency changes
-          - [ ] Check for breaking changes
-          - [ ] Verify test results
-          - [ ] Confirm security fixes
-          - [ ] Approve and merge
-          
-          ### 📚 Additional Information
-          - **Workflow Run:** #${{ github.run_number }}
-          - **Triggered:** ${{ github.event_name }}
-          - **Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          
-          ---
-          
-          ### 📄 Detailed Reports
-          All analysis and test reports are available in the workflow artifacts.
-          
-          ### 🤖 Automated Process
-          This PR was created automatically. Please review the changes before merging.
-          
-          **Versioning Policy:**
-          - ✅ Patch updates: Auto-approved
-          - ⚠️ Minor updates: Review recommended  
-          - 🚨 Major updates: Careful review required
-          
-          EOF
+          if [ -d "dist" ] && [ "$(ls -A dist)" ]; then
+            echo "dir=dist" >> $GITHUB_OUTPUT
+            echo "📁 Using dist/ directory"
+          elif [ -d "build" ] && [ "$(ls -A build)" ]; then
+            echo "dir=build" >> $GITHUB_OUTPUT
+            echo "📁 Using build/ directory"
+          elif [ -d "public" ] && [ "$(ls -A public)" ]; then
+            echo "dir=public" >> $GITHUB_OUTPUT
+            echo "📁 Using public/ directory"
+          elif [ -f "index.html" ]; then
+            echo "dir=." >> $GITHUB_OUTPUT
+            echo "📁 Using root directory"
+          else
+            echo "❌ No valid publish directory found!"
+            exit 1
+          fi
       
-      - name: 🔀 Create Pull Request
-        uses: peter-evans/create-pull-request@v6
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+      
+      - name: Upload artifact to Pages
+        uses: actions/upload-pages-artifact@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: deps/auto-update-${{ github.run_number }}
-          title: "🔄 [Automated] Dependency Updates - $(date +'%Y-%m-%d')"
-          body-path: pr-body.md
-          commit-message: |
-            chore(deps): automated dependency updates
-            
-            - Applied security fixes
-            - Updated patch versions
-            - Updated minor versions
-            - Tests verified
-            
-            Workflow run: #${{ github.run_number }}
-          labels: |
-            dependencies
-            automated
-            security
-          assignees: NabeehaIslam
-          reviewers: NabeehaIslam
-          draft: false
-          delete-branch: true
+          path: ${{ steps.publish-dir.outputs.dir }}
+      
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+      
+      - name: Deployment success
+        run: |
+          echo "✅ Deployment completed successfully!"
+          echo "🌐 Your site is live at: ${{ steps.deployment.outputs.page_url }}"
+      
+      - name: Post-deployment health check
+        run: |
+          echo "🏥 Waiting for site..."
+          sleep 10
+          URL="${{ steps.deployment.outputs.page_url }}"
+          STATUS=$(curl -o /dev/null -s -w "%{http_code}" "$URL" || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "✅ Health check passed (HTTP $STATUS)"
+          else
+            echo "⚠ Health check returned HTTP $STATUS"
+          fi
 
-  # Job 5: Monitoring and Alerts
-  monitor-status:
-    name: 📊 Monitor & Report Status
+  notify:
     runs-on: ubuntu-latest
-    needs: [analyze-dependencies, apply-updates, test-updates, create-pr]
-    if: always()
+    needs: [build, test, deploy]
+    if: always() && github.event_name == 'push'
     
     steps:
-      - name: 📊 Generate Status Report
+      - name: Check deployment status
         run: |
-          echo "# 📊 Dependency Update Workflow Status" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Workflow:** Automated Dependency Management" >> $GITHUB_STEP_SUMMARY
-          echo "**Run Number:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "## 📋 Job Status" >> $GITHUB_STEP_SUMMARY
-          echo "- Analyze Dependencies: ${{ needs.analyze-dependencies.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Apply Updates: ${{ needs.apply-updates.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Test Updates: ${{ needs.test-updates.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Create PR: ${{ needs.create-pr.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "## 📊 Statistics" >> $GITHUB_STEP_SUMMARY
-          echo "- Outdated Packages: ${{ needs.analyze-dependencies.outputs.update_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Security Updates: ${{ needs.analyze-dependencies.outputs.security_updates }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ needs.analyze-dependencies.outputs.has_updates }}" == "false" ]; then
-            echo "### ✅ All Dependencies Up-to-Date" >> $GITHUB_STEP_SUMMARY
-            echo "No updates were needed. All dependencies are current." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### 🔄 Updates Applied" >> $GITHUB_STEP_SUMMARY
-            echo "Pull request created with dependency updates. Review required." >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "📊 Pipeline Results:"
+          echo "Build:   ${{ needs.build.result }}"
+          echo "Test:    ${{ needs.test.result }}"
+          echo "Deploy:  ${{ needs.deploy.result }}"
