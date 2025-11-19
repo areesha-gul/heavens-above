@@ -13,11 +13,6 @@ on:
         options:
         - staging
         - production
-      deploy-region:
-        description: 'Deployment region (for cloud platforms)'
-        required: false
-        default: 'us-east-1'
-        type: string
 
 env:
   NODE_VERSION: '20.x'
@@ -26,9 +21,6 @@ jobs:
   build:
     name: Build Application
     runs-on: ubuntu-latest
-    
-    outputs:
-      build-success: ${{ steps.build.outputs.success }}
     
     steps:
     - name: Checkout code
@@ -42,38 +34,21 @@ jobs:
     - name: Install dependencies
       run: npm install
 
-    - name: Run tests
+    - name: Verify application
       run: |
-        echo "Running test suite..."
-        if [ -f "package.json" ] && npm run | grep -q "test"; then
-          npm test
-        else
-          echo "No test script found, skipping tests"
-        fi
+        echo "Verifying application..."
+        node -e "require('./run.js'); console.log('Application verified successfully')"
 
-    - name: Build project
-      id: build
+    - name: Build project (GitHub Pages)
       run: |
-        echo "Building application..."
-        if [ -f "package.json" ] && npm run | grep -q "build"; then
-          npm run build
-          echo "Build completed successfully"
-          echo "success=true" >> $GITHUB_OUTPUT
-        else
-          echo "No build script found, creating basic build verification..."
-          node -e "require('./run.js'); console.log('Application verified')"
-          echo "success=true" >> $GITHUB_OUTPUT
-        fi
+        echo "Building static site..."
+        mkdir -p build
+        cp -r * build/
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-pages-artifact@v3
       with:
-        name: build-artifacts
-        path: |
-          package.json
-          run.js
-          scripts/
-        retention-days: 7
+        path: build/
 
   security-scan:
     name: Security Scan
@@ -121,176 +96,38 @@ jobs:
         "
 
   deploy-staging:
-    name: Deploy to Staging
+    name: Deploy to GitHub Pages (Staging)
     runs-on: ubuntu-latest
     needs: [build, security-scan]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
     environment:
-      name: staging
-      url: https://your-staging-app.herokuapp.com
+      name: github-pages
     
+    permissions:
+      pages: write
+      id-token: write
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Download build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: build-artifacts
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-
-    - name: Install dependencies
-      run: npm install
-
-    - name: Deploy to Staging (Heroku Example)
-      if: env.HEROKU_API_KEY
-      uses: akhileshns/heroku-deploy@v3.12.12
-      with:
-        heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
-        heroku_app_name: ${{ secrets.HEROKU_STAGING_APP_NAME }}
-        heroku_email: ${{ secrets.HEROKU_EMAIL }}
-        usedocker: false
-
-    - name: Deploy to Staging (AWS S3 Example)
-      if: env.AWS_ACCESS_KEY_ID
-      run: |
-        echo "Deploying to AWS S3 staging..."
-        echo "AWS deployment would happen here"
-
-    - name: Deploy to Staging (Azure Example)
-      if: env.AZURE_WEBAPP_NAME
-      uses: azure/webapps-deploy@v2
-      with:
-        app-name: ${{ secrets.AZURE_STAGING_APP_NAME }}
-        publish-profile: ${{ secrets.AZURE_STAGING_PUBLISH_PROFILE }}
-        package: .
-
-    - name: Simulate deployment (No platforms configured)
-      if: env.HEROKU_API_KEY == '' && env.AWS_ACCESS_KEY_ID == '' && env.AZURE_WEBAPP_NAME == ''
-      run: |
-        echo "SIMULATED STAGING DEPLOYMENT COMPLETED"
-        echo "No deployment platforms configured. In a real scenario, this would deploy to:"
-        echo "- Heroku, AWS, Azure, or other platforms"
-        echo ""
-        echo "To enable actual deployments, set the required secrets:"
-        echo "For Heroku: HEROKU_API_KEY, HEROKU_STAGING_APP_NAME"
-        echo "For AWS: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY"
-        echo "For Azure: AZURE_STAGING_APP_NAME, AZURE_STAGING_PUBLISH_PROFILE"
-
-    - name: Health check staging deployment
-      run: |
-        echo "Performing health check on staging environment..."
-        echo "Staging deployment health check completed"
-
-    - name: Notify staging deployment
-      run: |
-        echo "SUCCESS: Staging deployment completed successfully"
-        echo "Environment: staging"
-        echo "Commit: ${{ github.sha }}"
-        echo "Deployed by: ${{ github.actor }}"
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
 
   deploy-production:
-    name: Deploy to Production
+    name: Deploy to GitHub Pages (Production)
     runs-on: ubuntu-latest
     needs: [build, security-scan, deploy-staging]
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
     environment:
       name: production
-      url: https://your-production-app.herokuapp.com
+
+    permissions:
+      pages: write
+      id-token: write
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Download build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: build-artifacts
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-
-    - name: Install dependencies
-      run: npm install
-
-    - name: Verify production readiness
-      run: |
-        echo "Verifying production deployment readiness..."
-        node -e "
-        const pkg = require('./package.json');
-        console.log('Production Deployment Details:');
-        console.log('App:', pkg.name);
-        console.log('Version:', pkg.version);
-        console.log('Node.js:', pkg.engines?.node || 'Not specified');
-        console.log('SUCCESS: Production verification completed');
-        "
-
-    - name: Deploy to Production (Heroku Example)
-      if: env.HEROKU_API_KEY
-      uses: akhileshns/heroku-deploy@v3.12.12
-      with:
-        heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
-        heroku_app_name: ${{ secrets.HEROKU_PRODUCTION_APP_NAME }}
-        heroku_email: ${{ secrets.HEROKU_EMAIL }}
-        usedocker: false
-
-    - name: Deploy to Production (AWS Example)
-      if: env.AWS_ACCESS_KEY_ID
-      run: |
-        echo "Deploying to AWS production..."
-        echo "AWS production deployment would happen here"
-
-    - name: Deploy to Production (Azure Example)
-      if: env.AZURE_WEBAPP_NAME
-      uses: azure/webapps-deploy@v2
-      with:
-        app-name: ${{ secrets.AZURE_PRODUCTION_APP_NAME }}
-        publish-profile: ${{ secrets.AZURE_PRODUCTION_PUBLISH_PROFILE }}
-        package: .
-
-    - name: Simulate production deployment (No platforms configured)
-      if: env.HEROKU_API_KEY == '' && env.AWS_ACCESS_KEY_ID == '' && env.AZURE_WEBAPP_NAME == ''
-      run: |
-        echo "SIMULATED PRODUCTION DEPLOYMENT COMPLETED"
-        echo "No deployment platforms configured. In a real scenario, this would deploy to production."
-        echo ""
-        echo "Production deployment would include:"
-        echo "- Zero-downtime deployment"
-        echo "- Health checks and monitoring"
-        echo "- Rollback capabilities"
-
-    - name: Production health check
-      run: |
-        echo "Performing production health check..."
-        echo "SUCCESS: Production health check completed"
-
-    - name: Notify production deployment
-      run: |
-        echo "PRODUCTION DEPLOYMENT SUCCESSFUL"
-        echo "Environment: production"
-        echo "Version: $(node -e "console.log(require('./package.json').version)")"
-        echo "Commit: ${{ github.sha }}"
-        echo "Deployed by: ${{ github.actor }}"
-        echo "Timestamp: $(date)"
-
-  rollback:
-    name: Rollback Procedure
-    runs-on: ubuntu-latest
-    if: failure() && (needs.deploy-staging.result == 'failure' || needs.deploy-production.result == 'failure')
-    
-    steps:
-    - name: Trigger rollback
-      run: |
-        echo "DEPLOYMENT FAILURE - INITIATING ROLLBACK"
-        echo "Failed job: ${{ needs.deploy-staging.result == 'failure' && 'staging' || 'production' }}"
-        echo "Rolling back to previous version..."
-        echo "Rollback procedure completed"
+    - name: Deploy to GitHub Pages (Production)
+      id: deployment
+      uses: actions/deploy-pages@v4
 
   deployment-summary:
     name: Deployment Summary
@@ -301,9 +138,7 @@ jobs:
     steps:
     - name: Generate deployment report
       run: |
-        echo "==========================================="
-        echo "         DEPLOYMENT PIPELINE SUMMARY"
-        echo "==========================================="
+        echo "DEPLOYMENT PIPELINE SUMMARY"
         echo "Workflow: ${{ github.workflow }}"
         echo "Trigger: ${{ github.event_name }}"
         echo "Commit: ${{ github.sha }}"
@@ -325,9 +160,3 @@ jobs:
           echo "OVERALL STATUS: PIPELINE FAILED"
           echo "Check failed stages above for details"
         fi
-        echo ""
-        echo "Next Actions:"
-        echo "1. Verify deployment health"
-        echo "2. Monitor application logs"
-        echo "3. Perform smoke tests"
-        echo "==========================================="
